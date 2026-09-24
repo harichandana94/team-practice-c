@@ -1,0 +1,21 @@
+# Local account data
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Local secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# macOS
+.DS_Store
