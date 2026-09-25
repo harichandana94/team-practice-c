@@ -3,11 +3,17 @@ import hmac
 import re
 import secrets
 import os
-import sqlite3
-from contextlib import contextmanager
+import psycopg
+import streamlit as st
 from datetime import datetime, timezone
 from pathlib import Path
+from dotenv import load_dotenv
+from contextlib import contextmanager
+from psycopg.rows import dict_row
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME")
@@ -26,7 +32,6 @@ st.set_page_config(
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATABASE_PATH = PROJECT_ROOT / "data" / "accounts.db"
 PASSWORD_ITERATIONS = 600_000
 
 
@@ -34,9 +39,15 @@ PASSWORD_ITERATIONS = 600_000
 
 @contextmanager
 def database():
-    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DATABASE_PATH, timeout=10)
-    connection.row_factory = sqlite3.Row
+    connection = psycopg.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        row_factory=dict_row,
+        connect_timeout=10,
+    )
 
     try:
         yield connection
@@ -47,24 +58,35 @@ def database():
     finally:
         connection.close()
 
-
-def initialize_database():
-    with database() as connection:
+def initialize_database():  
+     with database() as connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id BIGSERIAL PRIMARY KEY,
                 first_name TEXT NOT NULL,
                 last_name TEXT NOT NULL,
-                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                email TEXT NOT NULL,
+                username TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 phone TEXT NOT NULL DEFAULT '',
                 address TEXT NOT NULL DEFAULT '',
                 city TEXT NOT NULL DEFAULT '',
                 country TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
+                created_at TIMESTAMPTZ NOT NULL
             )
         """)
+
+        connection.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_unique
+            ON accounts (LOWER(email))
+        """)
+
+        connection.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_unique
+            ON accounts (LOWER(username))
+        """)
+
+
 
 
 # ---------- PASSWORD HANDLING ----------
@@ -114,7 +136,7 @@ def create_account(details, password):
                 password_hash, phone, address, city,
                 country, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             details["first_name"],
             details["last_name"],
@@ -125,7 +147,7 @@ def create_account(details, password):
             details["address"],
             details["city"],
             details["country"],
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(timezone.utc),
         ))
 
 
@@ -138,9 +160,13 @@ def dummy_password_hash():
 def authenticate(email, password):
     with database() as connection:
         account = connection.execute(
-            "SELECT id, password_hash FROM accounts WHERE email = ?",
-            (email.strip().lower(),),
-        ).fetchone()
+    """
+    SELECT id, password_hash
+    FROM accounts
+    WHERE LOWER(email) = LOWER(%s)
+    """,
+    (email.strip(),),
+).fetchone()
 
     stored_hash = (
         account["password_hash"] if account else dummy_password_hash()
@@ -152,14 +178,13 @@ def authenticate(email, password):
 
     return None
 
-
 def get_profile(account_id):
     with database() as connection:
         return connection.execute("""
             SELECT first_name, last_name, email, username,
                    phone, address, city, country, created_at
             FROM accounts
-            WHERE id = ?
+            WHERE id = %s
         """, (account_id,)).fetchone()
 
 
@@ -437,7 +462,9 @@ if st.session_state.account_id is not None:
             )
             st.text(f"Username: {profile['username']}")
             st.text(f"Email: {profile['email']}")
-            st.text(f"Member since: {profile['created_at'][:10]}")
+            st.text(
+    f"Member since: {profile['created_at'].strftime('%Y-%m-%d')}"
+)
 
     with contact:
         with st.container(border=True):
@@ -451,7 +478,7 @@ if st.session_state.account_id is not None:
             ):
                 st.text(f"{label}: {profile[field] or 'Not provided'}")
 
-    st.info("Your account has been saved in the local database.")
+    st.info("Your account has been saved in Amazon RDS PostgreSQL.")
 
 
 # ---------- LOGIN AND SIGNUP ----------
@@ -686,7 +713,7 @@ else:
                     try:
                         with st.spinner("Creating your account..."):
                             create_account(details, password)
-                    except sqlite3.IntegrityError:
+                    except psycopg.IntegrityError:
                         st.error(
                             "An account already uses that email or username. "
                             "Try logging in or choose different details."
