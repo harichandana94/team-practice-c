@@ -186,7 +186,13 @@ def get_profile(account_id):
             FROM accounts
             WHERE id = %s
         """, (account_id,)).fetchone()
-
+def update_profile(account_id, phone, address, city, country):
+    with database() as connection:
+        connection.execute("""
+            UPDATE accounts
+            SET phone = %s, address = %s, city = %s, country = %s
+            WHERE id = %s
+        """, (phone, address, city, country, account_id))
 
 # ---------- PAGE NAVIGATION ----------
 
@@ -463,8 +469,8 @@ if st.session_state.account_id is not None:
             st.text(f"Username: {profile['username']}")
             st.text(f"Email: {profile['email']}")
             st.text(
-    f"Member since: {profile['created_at'].strftime('%Y-%m-%d')}"
-)
+                f"Member since: {profile['created_at'].strftime('%Y-%m-%d')}"
+            )
 
     with contact:
         with st.container(border=True):
@@ -477,6 +483,32 @@ if st.session_state.account_id is not None:
                 ("Country", "country"),
             ):
                 st.text(f"{label}: {profile[field] or 'Not provided'}")
+
+    with st.expander("✏️ Edit contact details"):
+        with st.form("edit_form"):
+            new_phone = st.text_input("Phone number", value=profile["phone"], max_chars=20)
+            new_address = st.text_area("Address", value=profile["address"], max_chars=500)
+            c1, c2 = st.columns(2)
+            with c1:
+                new_city = st.text_input("City", value=profile["city"], max_chars=100)
+            with c2:
+                new_country = st.text_input("Country", value=profile["country"], max_chars=100)
+            save = st.form_submit_button("Save changes", type="primary", use_container_width=True)
+
+        if save:
+            phone_clean = new_phone.strip()
+            if phone_clean and not re.fullmatch(r"\+?[0-9 ()-]{7,15}", phone_clean):
+                st.error("Enter a valid phone number (7 to 15 digits; +, spaces, dashes and brackets are allowed).")
+            else:
+                update_profile(
+                    st.session_state.account_id,
+                    phone_clean,
+                    new_address.strip(),
+                    new_city.strip(),
+                    new_country.strip(),
+                )
+                st.session_state.notice = "Your details were updated."
+                st.rerun()
 
     st.info("Your account has been saved in Amazon RDS PostgreSQL.")
 
